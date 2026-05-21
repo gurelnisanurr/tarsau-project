@@ -2,7 +2,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <ctype.h>
-#include <sys/stat.h> // Dosya boyutu ve izinlerini okumak için ekledik
+#include <sys/stat.h>
+#include <sys/types.h>
 
 // Bir dosyanın sadece ASCII karakterlerden oluşup oluşmadığını kontrol eden fonksiyon
 int ascii_kontrol(const char *dosya_adi) {
@@ -27,19 +28,19 @@ int main(int argc, char *argv[]) {
         return 1;
     }
 
-    // 1. MOD: Dosyaları Birleştirme (-b)
+    // =========================================================================
+    // 1. MOD: DOSYALARI BİRLEŞTİRME (-b)
+    // =========================================================================
     if (strcmp(argv[1], "-b") == 0) {
         printf("Birleştirme modu (-b) seçildi.\n");
         
         int dosya_sayisi = 0;
         int o_indeksi = -1;
-        char cikis_dosya_adi[256] = "a.sau"; // Varsayılan çıktı adı: a.sau
+        char cikis_dosya_adi[256] = "a.sau"; // Varsayılan çıktı adı
 
-        // Girdi dosyalarının sınırını belirlemek ve -o parametresini aramak için döngü
         for (int i = 2; i < argc; i++) {
             if (strcmp(argv[i], "-o") == 0) {
                 o_indeksi = i;
-                // Eğer -o'dan sonra bir dosya adı girilmişse onu çıktı adı yapalım
                 if (i + 1 < argc) {
                     strcpy(cikis_dosya_adi, argv[i + 1]);
                 }
@@ -53,20 +54,15 @@ int main(int argc, char *argv[]) {
             return 1;
         }
 
-        printf("Toplam %d adet girdi dosyası tespit edildi.\n", dosya_sayisi);
-
-        // ASCII Format Kontrolü
         for (int i = 2; i < 2 + dosya_sayisi; i++) {
             if (!ascii_kontrol(argv[i])) {
                 printf("%s giriş dosyasının formatı uyumsuzdur!\n", argv[i]);
                 return 0; 
             }
         }
-        printf("Tüm girdi dosyalarının formatı uygun (ASCII).\n");
 
-        // --- YENİ ADIM: Boyut Kontrolü ve Organizasyon Bilgisi Toplama ---
         long long toplam_boyut = 0;
-        char organizasyon_buffer[4096] = ""; // Dosya bilgilerini toplayacağımız string
+        char organizasyon_buffer[4096] = ""; 
 
         for (int i = 2; i < 2 + dosya_sayisi; i++) {
             struct stat st;
@@ -75,36 +71,150 @@ int main(int argc, char *argv[]) {
                 return 1;
             }
 
-            toplam_boyut += st.st_size; // Dosya boyutunu toplama ekle
-            
-            // Linux izin maskesini octal (örneğin 0644) formatta almak için st.st_mode & 0777 kullanırız
-            int izinler = st.st_mode & 0777;
+            toplam_boyut += st.st_size;
+            int izinler = st.st_mode & 0777; 
 
-            // Bilgileri hoca amcanın istediği formata getiriyoruz: |Dosya adı, izinler, boyut|
             char gecici_kayit[512];
             sprintf(gecici_kayit, "|%s,%o,%ld|", argv[i], izinler, st.st_size);
             strcat(organizasyon_buffer, gecici_kayit);
         }
 
-        // 200 MB sınırı kontrolü (200 * 1024 * 1024 bayt)
         if (toplam_boyut > 200 * 1024 * 1024) {
             printf("Hata: Giriş dosyalarının toplam boyutu 200 MB'ı geçemez!\n");
             return 1;
         }
 
-        printf("Toplam Boyut: %lld bayt (Limit uygun).\n", toplam_boyut);
-        printf("Çıktı Dosyası Adı: %s\n", cikis_dosya_adi);
-        printf("Oluşturulacak Organizasyon Bölümü:\n%s\n", organizasyon_buffer);
-        
-        // Bir sonraki adımda bu bilgileri kullanarak gerçek .sau dosyasını yazacağız!
+        FILE *cikis_f = fopen(cikis_dosya_adi, "w");
+        if (cikis_f == NULL) {
+            printf("Hata: Çıktı dosyası oluşturulamadı!\n");
+            return 1;
+        }
+
+        long organizasyon_uzunlugu = strlen(organizasyon_buffer);
+        fprintf(cikis_f, "%010ld", organizasyon_uzunlugu);
+        fprintf(cikis_f, "%s", organizasyon_buffer);
+
+        for (int i = 2; i < 2 + dosya_sayisi; i++) {
+            FILE *girdi_f = fopen(argv[i], "r");
+            if (girdi_f != NULL) {
+                int ch;
+                while ((ch = fgetc(girdi_f)) != EOF) {
+                    fputc(ch, cikis_f); 
+                }
+                fclose(girdi_f);
+            }
+        }
+
+        fclose(cikis_f);
+        printf("Dosyalar birleştirildi.\n");
     } 
     
-    // 2. MOD: Arşivi Geri Açma (-a)
+    // =========================================================================
+    // 2. MOD: ARŞİVİ GERİ AÇMA (-a)
+    // =========================================================================
     else if (strcmp(argv[1], "-a") == 0) {
-        printf("Arşiv açma modu (-a) seçildi.\n");
-        if (argc > 4) {
-            printf("Hata: -a parametresinden sonra en fazla 2 parametre girilebilir!\n");
+        if (argc < 3 || argc > 5) {
+            printf("Arşiv dosyası uygunsuz veya bozuk!\n");
             return 1;
+        }
+
+        char *arsiv_adi = argv[2];
+        char *hedef_dizin = (argc == 4) ? argv[3] : NULL;
+
+        // Arşiv dosyasını okuma modunda açıyoruz
+        FILE *arsiv_f = fopen(arsiv_adi, "r");
+        if (arsiv_f == NULL) {
+            printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+            return 1;
+        }
+
+        // 1) İlk 10 baytı oku ve organizasyon bölümünün uzunluğunu al
+        char uzunluk_str[11] = {0};
+        if (fread(uzunluk_str, 1, 10, arsiv_f) != 10) {
+            printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+            fclose(arsiv_f);
+            return 1;
+        }
+        long organizasyon_uzunlugu = atol(uzunluk_str);
+
+        // 2) Organizasyon bölümünü hafızaya oku
+        char *organizasyon = malloc(organizasyon_uzunlugu + 1);
+        if (fread(organizasyon, 1, organizasyon_uzunlugu, arsiv_f) != organizasyon_uzunlugu) {
+            printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+            free(organizasyon);
+            fclose(arsiv_f);
+            return 1;
+        }
+        organizasyon[organizasyon_uzunlugu] = '\0';
+
+        // 3) Eğer hedef dizin belirtildiyse ve yoksa oluştur (mkdir)
+        if (hedef_dizin != NULL) {
+            // S_IRWXU | S_IRWXG | S_IRWXO -> Okuma, yazma, çalıştırma izinleri (0777)
+            mkdir(hedef_dizin, 0777);
+        }
+
+        // 4) Organizasyon stringini ayrıştır ve dosyaları geri yaz
+        // String içindeki verileri tek tek işlemek için geçici işaretçiler kullanıyoruz
+        char *ptr = organizasyon;
+        
+        // Arşivdeki dosyaların içeriklerinin başladığı konumu kaydet
+        long veri_baslangic_pos = ftell(arsiv_f);
+
+        while ((ptr = strchr(ptr, '|')) != NULL) {
+            ptr++; // '|' karakterini geç
+            char *bitis = strchr(ptr, '|');
+            if (bitis == NULL) break;
+            
+            // Tek bir kaydı ayır (Örn: "t1.txt,644,31")
+            char kayit[512] = {0};
+            strncpy(kayit, ptr, bitis - ptr);
+            ptr = bitis + 1; // Bir sonraki kayda hazırla
+
+            // Kayıt içindeki alanları virgülle parçala
+            char d_adi[256], d_izin_str[20];
+            long d_boyut;
+            
+            sscanf(kayit, "%[^,],%[^,],%ld", d_adi, d_izin_str, &d_boyut);
+            int d_izin = (int)strtol(d_izin_str, NULL, 8); // Octal stringi sayıya çevir
+
+            // Hedef dosya yolunu belirle
+            char tam_yol[512];
+            if (hedef_dizin != NULL) {
+                sprintf(tam_yol, "%s/%s", hedef_dizin, d_adi);
+            } else {
+                strcpy(tam_yol, d_adi);
+            }
+
+            // Dosya verisini kopyalamak için arşiv dosyasındaki konumumuzu kaydet,
+            // veri alanına zıpla, veriyi yaz ve eski konumumuza geri dön
+            long anlik_organizasyon_pos = ftell(arsiv_f);
+            fseek(arsiv_f, veri_baslangic_pos, SEEK_SET);
+
+            FILE *yeni_dosya = fopen(tam_yol, "w");
+            if (yeni_dosya != NULL) {
+                for (long b = 0; b < d_boyut; b++) {
+                    fputc(fgetc(arsiv_f), yeni_dosya);
+                }
+                fclose(yeni_dosya);
+                
+                // Orijinal izinlerini geri tanımlıyoruz (chmod)
+                chmod(tam_yol, d_izin);
+            }
+
+            // Bir sonraki dosyanın verisi bir öncekinin bittiği yerden devam edecek
+            veri_baslangic_pos = ftell(arsiv_f);
+            
+            // Organizasyon bölümünü okumaya devam etmek için eski konumumuza dönüyoruz
+            fseek(arsiv_f, anlik_organizasyon_pos, SEEK_SET);
+        }
+
+        free(organizasyon);
+        fclose(arsiv_f);
+        
+        if (hedef_dizin != NULL) {
+            printf("%s dizininde dosyalar açıldı.\n", hedef_dizin);
+        } else {
+            printf("Dosyalar geçerli dizinde açıldı.\n");
         }
     } 
     
