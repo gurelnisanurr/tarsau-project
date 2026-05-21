@@ -1,1 +1,1 @@
-Merhaba Bilgisayar Muhendisligi
+Hello bu birinci dosya icerigidir.
