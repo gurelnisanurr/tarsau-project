@@ -4,6 +4,7 @@
 #include <ctype.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <errno.h>
 
 // Bir dosyanın sadece ASCII karakterlerden oluşup oluşmadığını kontrol eden fonksiyon
 int ascii_kontrol(const char *dosya_adi) {
@@ -42,7 +43,8 @@ int main(int argc, char *argv[]) {
             if (strcmp(argv[i], "-o") == 0) {
                 o_indeksi = i;
                 if (i + 1 < argc) {
-                    strcpy(cikis_dosya_adi, argv[i + 1]);
+                    strncpy(cikis_dosya_adi, argv[i + 1], 255);  // ✅ GÜVENLI
+cikis_dosya_adi[255] = '\0';
                 }
                 break; 
             }
@@ -62,7 +64,7 @@ int main(int argc, char *argv[]) {
         }
 
         long long toplam_boyut = 0;
-        char organizasyon_buffer[4096] = ""; 
+        char organizasyon_buffer[65536] = ""; 
 
         for (int i = 2; i < 2 + dosya_sayisi; i++) {
             struct stat st;
@@ -75,7 +77,7 @@ int main(int argc, char *argv[]) {
             int izinler = st.st_mode & 0777; 
 
             char gecici_kayit[512];
-            sprintf(gecici_kayit, "|%s,%o,%ld|", argv[i], izinler, st.st_size);
+            snprintf(gecici_kayit, sizeof(gecici_kayit), "|%s,%o,%ld|", argv[i], izinler, st.st_size);
             strcat(organizasyon_buffer, gecici_kayit);
         }
 
@@ -113,7 +115,7 @@ int main(int argc, char *argv[]) {
     // 2. MOD: ARŞİVİ GERİ AÇMA (-a)
     // =========================================================================
     else if (strcmp(argv[1], "-a") == 0) {
-        if (argc < 3 || argc > 5) {
+        if (argc != 3 && argc != 4) {
             printf("Arşiv dosyası uygunsuz veya bozuk!\n");
             return 1;
         }
@@ -122,7 +124,12 @@ int main(int argc, char *argv[]) {
         char *hedef_dizin = (argc == 4) ? argv[3] : NULL;
 
         // Arşiv dosyasını okuma modunda açıyoruz
-        FILE *arsiv_f = fopen(arsiv_adi, "r");
+       if (strlen(arsiv_adi) < 5 || strcmp(arsiv_adi + strlen(arsiv_adi) - 4, ".sau") != 0) {
+    printf("Arşiv dosyası uygunsuz veya bozuk!\n");
+    return 1;
+}
+
+FILE *arsiv_f = fopen(arsiv_adi, "r");
         if (arsiv_f == NULL) {
             printf("Arşiv dosyası uygunsuz veya bozuk!\n");
             return 1;
@@ -150,7 +157,12 @@ int main(int argc, char *argv[]) {
         // 3) Eğer hedef dizin belirtildiyse ve yoksa oluştur (mkdir)
         if (hedef_dizin != NULL) {
             // S_IRWXU | S_IRWXG | S_IRWXO -> Okuma, yazma, çalıştırma izinleri (0777)
-            mkdir(hedef_dizin, 0777);
+           if (mkdir(hedef_dizin, 0777) != 0 && errno != EEXIST) {
+    printf("Hata: Dizin oluşturulamadı: %s\n", hedef_dizin);
+    free(organizasyon);
+    fclose(arsiv_f);
+    return 1;
+}
         }
 
         // 4) Organizasyon stringini ayrıştır ve dosyaları geri yaz
@@ -167,7 +179,10 @@ int main(int argc, char *argv[]) {
             
             // Tek bir kaydı ayır (Örn: "t1.txt,644,31")
             char kayit[512] = {0};
-            strncpy(kayit, ptr, bitis - ptr);
+            long length = bitis - ptr;
+if (length > (long)sizeof(kayit) - 1) length = sizeof(kayit) - 1;
+strncpy(kayit, ptr, length);
+kayit[length] = '\0';
             ptr = bitis + 1; // Bir sonraki kayda hazırla
 
             // Kayıt içindeki alanları virgülle parçala
@@ -180,7 +195,7 @@ int main(int argc, char *argv[]) {
             // Hedef dosya yolunu belirle
             char tam_yol[512];
             if (hedef_dizin != NULL) {
-                sprintf(tam_yol, "%s/%s", hedef_dizin, d_adi);
+                snprintf(tam_yol, sizeof(tam_yol), "%s/%s", hedef_dizin, d_adi);
             } else {
                 strcpy(tam_yol, d_adi);
             }
@@ -192,9 +207,17 @@ int main(int argc, char *argv[]) {
 
             FILE *yeni_dosya = fopen(tam_yol, "w");
             if (yeni_dosya != NULL) {
-                for (long b = 0; b < d_boyut; b++) {
-                    fputc(fgetc(arsiv_f), yeni_dosya);
-                }
+                char buffer[4096];
+long remaining = d_boyut;
+
+while (remaining > 0) {
+    size_t to_read = (remaining > 4096) ? 4096 : remaining;
+    size_t read = fread(buffer, 1, to_read, arsiv_f);
+    if (read == 0) break;
+    
+    fwrite(buffer, 1, read, yeni_dosya);
+    remaining -= read;
+}
                 fclose(yeni_dosya);
                 
                 // Orijinal izinlerini geri tanımlıyoruz (chmod)
