@@ -1,3 +1,12 @@
+/* ============================================================
+ * birles.c — birden fazla dosyayı tek .sau arşivinde birleştirme modülü
+ *
+ * Oluşturulan .sau dosya formatı:
+ *   [10 bayt: organizasyon uzunluğu (sıfır dolgulu ASCII)]
+ *   [organizasyon: |dosyaadi,izin_oktal,boyut| ... ]
+ *   [dosya1 ham verisi][dosya2 ham verisi]...
+ * ============================================================ */
+
 #include "birles.h"
 #include "utils.h"
 #include <stdio.h>
@@ -10,8 +19,10 @@ int birles_modu(int argc, char *argv[])
     printf("Birleştirme modu (-b) seçildi.\n");
 
     int dosya_sayisi = 0;
-    char cikis_dosya_adi[256] = "a.sau";
+    char cikis_dosya_adi[256] = "a.sau"; /* Varsayılan çıkış dosyası adı */
 
+    /* -o bayrağından önceki argümanları giriş dosyası olarak say;
+       -o den sonraki argümanı çıkış dosyası adı olarak al */
     for (int i = 2; i < argc; i++)
     {
         if (strcmp(argv[i], "-o") == 0)
@@ -26,12 +37,14 @@ int birles_modu(int argc, char *argv[])
         dosya_sayisi++;
     }
 
+    /* Giriş dosyası sayısı sınırını aşıyor mu kontrol et */
     if (dosya_sayisi > 32)
     {
         printf("Hata: Giriş dosyası sayısı en fazla 32 olabilir!\n");
         return 1;
     }
 
+    /* Her giriş dosyasının yalnızca ASCII karakterler içerdiğini doğrula */
     for (int i = 2; i < 2 + dosya_sayisi; i++)
     {
         if (!ascii_kontrol(argv[i]))
@@ -42,8 +55,9 @@ int birles_modu(int argc, char *argv[])
     }
 
     long long toplam_boyut = 0;
-    char organizasyon_buffer[65536] = "";
+    char organizasyon_buffer[65536] = ""; /* Tüm dosya meta verisi kayıtları */
 
+    /* Her giriş dosyasının istatistiklerini topla ve organizasyon kaydını oluştur */
     for (int i = 2; i < 2 + dosya_sayisi; i++)
     {
         struct stat st;
@@ -54,19 +68,22 @@ int birles_modu(int argc, char *argv[])
         }
 
         toplam_boyut += st.st_size;
-        int izinler = st.st_mode & 0777;
+        int izinler = st.st_mode & 0777; /* Yalnızca rwxrwxrwx bitlerini al */
 
+        /* Kaydı |dosyaadi,izin_oktal,boyut| biçiminde oluştur */
         char gecici_kayit[512];
         snprintf(gecici_kayit, sizeof(gecici_kayit), "|%s,%o,%ld|", argv[i], izinler, st.st_size);
         strcat(organizasyon_buffer, gecici_kayit);
     }
 
+    /* Toplam boyut 200 MB sınırını geçiyor mu kontrol et */
     if (toplam_boyut > 200 * 1024 * 1024)
     {
         printf("Hata: Giriş dosyalarının toplam boyutu 200 MB'ı geçemez!\n");
         return 1;
     }
 
+    /* Çıkış arşiv dosyasını oluştur */
     FILE *cikis_f = fopen(cikis_dosya_adi, "w");
     if (cikis_f == NULL)
     {
@@ -74,16 +91,19 @@ int birles_modu(int argc, char *argv[])
         return 1;
     }
 
+    /* Başlığı yaz: 10 baytlık organizasyon uzunluğu + organizasyon içeriği */
     long organizasyon_uzunlugu = strlen(organizasyon_buffer);
-    fprintf(cikis_f, "%010ld", organizasyon_uzunlugu);
+    fprintf(cikis_f, "%010ld", organizasyon_uzunlugu); /* 10 bayt, sıfır dolgulu */
     fprintf(cikis_f, "%s", organizasyon_buffer);
 
+    /* Her giriş dosyasının ham verisini arşive sırayla ekle */
     for (int i = 2; i < 2 + dosya_sayisi; i++)
     {
         FILE *girdi_f = fopen(argv[i], "r");
         if (girdi_f != NULL)
         {
             int ch;
+            /* Dosyayı bayt bayt kopyala */
             while ((ch = fgetc(girdi_f)) != EOF)
                 fputc(ch, cikis_f);
             fclose(girdi_f);
